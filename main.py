@@ -36,7 +36,7 @@ async def chat(websocket: WebSocket, user: str):
 
             print(f"Received message from {user} to {recipient}: {message}")
 
-            # ✅ Store message in MongoDB chat history
+            # Store message in MongoDB chat history
             chat = ChatHistory(message=message, sender=user, recipient=recipient)
             chat.save()
 
@@ -52,8 +52,11 @@ async def chat(websocket: WebSocket, user: str):
             if recipient in active_connections:
                 recipient_ws = active_connections[recipient]
                 await recipient_ws.send_text(json.dumps({"type": "message", "data": formatted_message}))
+            else:
+                # If recipient is not connected, notify sender
+                await websocket.send_text(json.dumps({"type": "error", "message": f"Recipient {recipient} is not connected."}))
 
-            # ✅ Send acknowledgment to sender (NO ERROR if recipient is offline)
+            # ✅ Send acknowledgment to sender
             await websocket.send_text(json.dumps({"type": "acknowledgment", "data": formatted_message}))
 
     except WebSocketDisconnect:
@@ -72,15 +75,19 @@ async def get_old_messages(user_name: str, other_user_name: str, limit: int = 10
     if not history:
         raise HTTPException(status_code=404, detail="No messages found")
 
-    return [
+    return {
+        "data": [
         {
             "sender": chat.sender,
             "recipient": chat.recipient,
             "message": chat.message,
             "timestamp": chat.timestamp.isoformat()
         }
+        
         for chat in history
-    ]
+    ],
+    "status": True
+    }
 
 import uvicorn
 
