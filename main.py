@@ -4,26 +4,22 @@ from datetime import datetime
 from typing import Dict
 import json
 
-# MongoDB setup with MongoEngine
+# MongoDB setup
 me.connect('educatChatHistory', host="mongodb+srv://avbigbuddy:nZ4ATPTwJjzYnm20@cluster0.wplpkxz.mongodb.net/educatChatHistory")
 
-# Define a ChatHistory model to store messages
+# ChatHistory Model
 class ChatHistory(me.Document):
     message = me.StringField(required=True)
     sender = me.StringField(required=True)
     recipient = me.StringField(required=True)
     timestamp = me.DateTimeField(default=datetime.utcnow)
 
-# FastAPI app
 app = FastAPI()
-
-# Store active WebSocket connections for users (1-to-1 communication)
 active_connections: Dict[str, WebSocket] = {}
 
-# WebSocket endpoint for 1-to-1 chat
 @app.websocket("/ws/chat/{user}")
 async def chat(websocket: WebSocket, user: str):
-    user = str(user)  # Ensure user ID is a string
+    user = str(user)
     await websocket.accept()
     active_connections[user] = websocket
     print(f"User {user} connected. Active users: {list(active_connections.keys())}")
@@ -31,18 +27,22 @@ async def chat(websocket: WebSocket, user: str):
     try:
         while True:
             data = await websocket.receive_text()
-            message_data = json.loads(data)  # Expecting {"recipient": "user2", "message": "Hello"}
+            print(f"Raw received data: {data}")  # Debugging
 
-            recipient = str(message_data["recipient"])
-            message = message_data["message"]
+            try:
+                message_data = json.loads(data)
+                recipient = str(message_data["recipient"])
+                message = message_data["message"]
+            except Exception as e:
+                print(f"JSON parsing error: {e}")
+                continue
 
             print(f"Received message from {user} to {recipient}: {message}")
 
-            # Store message in MongoDB chat history
+            # Save message in MongoDB
             chat = ChatHistory(message=message, sender=user, recipient=recipient)
             chat.save()
 
-            # Format message data
             formatted_message = {
                 "sender": user,
                 "recipient": recipient,
@@ -50,22 +50,20 @@ async def chat(websocket: WebSocket, user: str):
                 "timestamp": datetime.utcnow().isoformat()
             }
 
-            # ✅ Send message to recipient if online
+            # Send to recipient if online
             if recipient in active_connections:
                 recipient_ws = active_connections[recipient]
-                
-                # Check if WebSocket is still active
-                if recipient_ws.application_state == WebSocketDisconnect:
-                    print(f"Recipient {recipient} WebSocket is closed.")
-                    del active_connections[recipient]
-                else:
+                print(f"Recipient {recipient} found in active_connections.")  # Debugging
+
+                try:
                     await recipient_ws.send_text(json.dumps({"type": "message", "data": formatted_message}))
+                except Exception as e:
+                    print(f"Error sending message to {recipient}: {e}")
+                    del active_connections[recipient]
             else:
-                # If recipient is not connected, notify sender
-                print(f"Recipient {recipient} is not in active_connections")
+                print(f"Recipient {recipient} is NOT in active_connections!")  # Debugging
                 await websocket.send_text(json.dumps({"type": "error", "message": f"Recipient {recipient} is not connected."}))
 
-            # ✅ Send acknowledgment to sender
             await websocket.send_text(json.dumps({"type": "acknowledgment", "data": formatted_message}))
 
     except WebSocketDisconnect:
@@ -74,7 +72,6 @@ async def chat(websocket: WebSocket, user: str):
             del active_connections[user]
         print(f"Updated active users: {list(active_connections.keys())}")
 
-# API endpoint to fetch old private chat messages
 @app.get("/messages/{user_name}/{other_user_name}")
 async def get_old_messages(user_name: str, other_user_name: str, limit: int = 10):
     history = ChatHistory.objects(
