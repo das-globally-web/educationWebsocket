@@ -1,7 +1,7 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 import mongoengine as me
 from datetime import datetime
-from typing import List, Dict
+from typing import Dict
 import json
 
 # MongoDB setup with MongoEngine
@@ -17,53 +17,53 @@ class ChatHistory(me.Document):
 # FastAPI app
 app = FastAPI()
 
-# Store active WebSocket connections for users
+# Store active WebSocket connections for users (1-to-1 communication)
 active_connections: Dict[str, WebSocket] = {}
 
-# WebSocket endpoint to handle 1-to-1 private chat
-@app.websocket("/ws/chat/{sender}/{recipient}")
-async def chat(websocket: WebSocket, sender: str, recipient: str):
-    # Add the WebSocket connection to the active_connections dictionary
-    active_connections[sender] = websocket
+# WebSocket endpoint for 1-to-1 chat
+@app.websocket("/ws/chat/{user}")
+async def chat(websocket: WebSocket, user: str):
     await websocket.accept()
-    
+    active_connections[user] = websocket  # ✅ Store user WebSocket connection
+
     try:
         while True:
             data = await websocket.receive_text()
-            print(f"Received message from {sender} to {recipient}: {data}")
+            message_data = json.loads(data)  # Expecting {"recipient": "user2", "message": "Hello"}
 
-            # Store message in MongoDB chat history
-            chat = ChatHistory(message=data, sender=sender, recipient=recipient)
+            recipient = message_data["recipient"]
+            message = message_data["message"]
+
+            print(f"Received message from {user} to {recipient}: {message}")
+
+            # ✅ Store message in MongoDB chat history
+            chat = ChatHistory(message=message, sender=user, recipient=recipient)
             chat.save()
 
-            # Prepare message data in JSON format
-            message_data = {
-                "sender": sender,
+            # Format message data
+            formatted_message = {
+                "sender": user,
                 "recipient": recipient,
-                "message": data,
+                "message": message,
                 "timestamp": datetime.utcnow().isoformat()
             }
 
-            # Check if the recipient is connected
+            # ✅ Send message to recipient if online
             if recipient in active_connections:
                 recipient_ws = active_connections[recipient]
-                # Send the message to the recipient in JSON format
-                await recipient_ws.send_text(json.dumps({"type": "message", "data": message_data}))
-            else:
-                # If the recipient is not connected, notify the sender
-                await websocket.send_text(json.dumps({"type": "error", "message": f"Recipient {recipient} is not connected."}))
-            
-            # Send the message back to the sender in JSON format
-            await websocket.send_text(json.dumps({"type": "acknowledgment", "data": message_data}))
+                await recipient_ws.send_text(json.dumps({"type": "message", "data": formatted_message}))
+
+            # ✅ Send acknowledgment to sender (NO ERROR if recipient is offline)
+            await websocket.send_text(json.dumps({"type": "acknowledgment", "data": formatted_message}))
 
     except WebSocketDisconnect:
-        print(f"User {sender} disconnected")
-        del active_connections[sender]  # Remove the sender from active_connections
+        print(f"User {user} disconnected")
+        if user in active_connections:
+            del active_connections[user]  # ✅ Remove user from active connections
 
 # API endpoint to fetch old private chat messages
 @app.get("/messages/{user_name}/{other_user_name}")
 async def get_old_messages(user_name: str, other_user_name: str, limit: int = 10):
-    # Fetch the last 'limit' number of messages between the two users
     history = ChatHistory.objects(
         (me.Q(sender=user_name) & me.Q(recipient=other_user_name)) | 
         (me.Q(sender=other_user_name) & me.Q(recipient=user_name))
@@ -72,7 +72,6 @@ async def get_old_messages(user_name: str, other_user_name: str, limit: int = 10
     if not history:
         raise HTTPException(status_code=404, detail="No messages found")
 
-    # Return formatted chat history
     return [
         {
             "sender": chat.sender,
