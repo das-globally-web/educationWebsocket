@@ -23,15 +23,17 @@ active_connections: Dict[str, WebSocket] = {}
 # WebSocket endpoint for 1-to-1 chat
 @app.websocket("/ws/chat/{user}")
 async def chat(websocket: WebSocket, user: str):
+    user = str(user)  # Ensure user ID is a string
     await websocket.accept()
-    active_connections[user] = websocket  # ✅ Store user WebSocket connection
+    active_connections[user] = websocket
+    print(f"User {user} connected. Active users: {list(active_connections.keys())}")
 
     try:
         while True:
             data = await websocket.receive_text()
             message_data = json.loads(data)  # Expecting {"recipient": "user2", "message": "Hello"}
 
-            recipient = message_data["recipient"]
+            recipient = str(message_data["recipient"])
             message = message_data["message"]
 
             print(f"Received message from {user} to {recipient}: {message}")
@@ -51,9 +53,16 @@ async def chat(websocket: WebSocket, user: str):
             # ✅ Send message to recipient if online
             if recipient in active_connections:
                 recipient_ws = active_connections[recipient]
-                await recipient_ws.send_text(json.dumps({"type": "message", "data": formatted_message}))
+                
+                # Check if WebSocket is still active
+                if recipient_ws.application_state == WebSocketDisconnect:
+                    print(f"Recipient {recipient} WebSocket is closed.")
+                    del active_connections[recipient]
+                else:
+                    await recipient_ws.send_text(json.dumps({"type": "message", "data": formatted_message}))
             else:
                 # If recipient is not connected, notify sender
+                print(f"Recipient {recipient} is not in active_connections")
                 await websocket.send_text(json.dumps({"type": "error", "message": f"Recipient {recipient} is not connected."}))
 
             # ✅ Send acknowledgment to sender
@@ -62,7 +71,8 @@ async def chat(websocket: WebSocket, user: str):
     except WebSocketDisconnect:
         print(f"User {user} disconnected")
         if user in active_connections:
-            del active_connections[user]  # ✅ Remove user from active connections
+            del active_connections[user]
+        print(f"Updated active users: {list(active_connections.keys())}")
 
 # API endpoint to fetch old private chat messages
 @app.get("/messages/{user_name}/{other_user_name}")
@@ -77,16 +87,15 @@ async def get_old_messages(user_name: str, other_user_name: str, limit: int = 10
 
     return {
         "data": [
-        {
-            "sender": chat.sender,
-            "recipient": chat.recipient,
-            "message": chat.message,
-            "timestamp": chat.timestamp.isoformat()
-        }
-        
-        for chat in history
-    ],
-    "status": True
+            {
+                "sender": chat.sender,
+                "recipient": chat.recipient,
+                "message": chat.message,
+                "timestamp": chat.timestamp.isoformat()
+            }
+            for chat in history
+        ],
+        "status": True
     }
 
 import uvicorn
