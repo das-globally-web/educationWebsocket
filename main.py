@@ -30,7 +30,7 @@ class ConnectionManager:
         self.active_connections[user_id] = websocket
         print(f"✅ User {user_id} connected. Active users: {list(self.active_connections.keys())}")
         
-        # Notify user of active users list
+        # ✅ Ensure all users get the updated active users list
         await self.notify_active_users()
 
     def disconnect(self, user_id: str):
@@ -76,6 +76,8 @@ class ConnectionManager:
     async def notify_active_users(self):
         """Notify all connected users of active user list."""
         active_users_list = list(self.active_connections.keys())
+
+        # ✅ Notify all users about the updated active users list
         for user_id, websocket in self.active_connections.items():
             try:
                 await websocket.send_text(json.dumps({"type": "active_users", "data": active_users_list}))
