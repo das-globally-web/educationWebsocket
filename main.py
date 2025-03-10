@@ -28,12 +28,16 @@ class ConnectionManager:
         """Accept WebSocket connection and store it."""
         await websocket.accept()
         self.active_connections[user_id] = websocket
-        print(f"User {user_id} connected. Active users: {list(self.active_connections.keys())}")
+        print(f"✅ User {user_id} connected. Active users: {list(self.active_connections.keys())}")
+        
+        # Notify user of active users list
+        await self.notify_active_users()
 
     def disconnect(self, user_id: str):
         """Remove WebSocket connection on disconnect."""
-        self.active_connections.pop(user_id, None)
-        print(f"User {user_id} disconnected. Updated users: {list(self.active_connections.keys())}")
+        if user_id in self.active_connections:
+            del self.active_connections[user_id]
+            print(f"❌ User {user_id} disconnected. Updated users: {list(self.active_connections.keys())}")
 
     async def send_private_message(self, sender_id: str, receiver_id: str, message: str):
         """Send a message to a specific user and store in MongoDB."""
@@ -53,15 +57,31 @@ class ConnectionManager:
         receiver_socket = self.active_connections.get(receiver_id)
         if receiver_socket:
             try:
+                print(f"📨 Sending message to {receiver_id}...")
                 await receiver_socket.send_text(json.dumps({"type": "message", "data": formatted_message}))
+                print(f"✅ Message sent to {receiver_id}")
             except Exception as e:
-                print(f"Error sending message to {receiver_id}: {e}")
+                print(f"❌ Error sending message to {receiver_id}: {e}")
                 self.disconnect(receiver_id)  # Remove inactive connection
 
         # ✅ Send acknowledgment to sender
         sender_socket = self.active_connections.get(sender_id)
         if sender_socket:
-            await sender_socket.send_text(json.dumps({"type": "acknowledgment", "data": formatted_message}))
+            try:
+                print(f"✅ Sending acknowledgment to {sender_id}")
+                await sender_socket.send_text(json.dumps({"type": "acknowledgment", "data": formatted_message}))
+            except Exception as e:
+                print(f"❌ Error sending acknowledgment to {sender_id}: {e}")
+
+    async def notify_active_users(self):
+        """Notify all connected users of active user list."""
+        active_users_list = list(self.active_connections.keys())
+        for user_id, websocket in self.active_connections.items():
+            try:
+                await websocket.send_text(json.dumps({"type": "active_users", "data": active_users_list}))
+            except Exception as e:
+                print(f"❌ Error notifying {user_id} of active users: {e}")
+                self.disconnect(user_id)
 
 # Instantiate Connection Manager
 manager = ConnectionManager()
@@ -74,26 +94,28 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
     try:
         while True:
             data = await websocket.receive_text()
-            print(f"Raw received data: {data}")  # Debugging
+            print(f"🔵 Raw received data from {user_id}: {data}")  # Debugging  
 
             try:
                 message_data = json.loads(data)
-                recipient = str(message_data.get("recipient"))
+                recipient = message_data.get("recipient")
                 message = message_data.get("message")
-                
+
                 if not recipient or not message:
                     await websocket.send_text(json.dumps({"error": "Missing recipient or message"}))
                     continue
 
-                print(f"Received message from {user_id} to {recipient}: {message}")
+                print(f"📩 Received message from {user_id} to {recipient}: {message}")
                 await manager.send_private_message(user_id, recipient, message)
 
             except json.JSONDecodeError:
-                print("Invalid JSON format received")
+                print("❌ Invalid JSON format received")
                 await websocket.send_text(json.dumps({"error": "Invalid JSON format"}))
 
     except WebSocketDisconnect:
+        print(f"⚠️ {user_id} disconnected")
         manager.disconnect(user_id)
+        await manager.notify_active_users()
 
 # API to retrieve chat history
 @app.get("/messages/{user_name}/{other_user_name}")
