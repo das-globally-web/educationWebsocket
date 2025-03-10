@@ -62,7 +62,6 @@ async def chat(websocket: WebSocket, user: str):
                     del active_connections[recipient]
             else:
                 print(f"Recipient {recipient} is NOT in active_connections!")  # Debugging
-                await websocket.send_text(json.dumps({"type": "error", "message": f"Recipient {recipient} is not connected."}))
 
             await websocket.send_text(json.dumps({"type": "acknowledgment", "data": formatted_message}))
 
