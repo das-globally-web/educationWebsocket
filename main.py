@@ -38,7 +38,7 @@ class ConnectionManager:
     async def send_private_message(self, sender_id: str, receiver_id: str, message: str):
         """Send a message to a specific user and store in MongoDB."""
         
-        # Store message in MongoDB
+        # ✅ Always store message in MongoDB (Even if recipient is offline)
         chat = ChatHistory(message=message, sender=sender_id, recipient=receiver_id)
         chat.save()
 
@@ -49,16 +49,16 @@ class ConnectionManager:
             "timestamp": datetime.utcnow().isoformat()
         }
 
-        # Send message if receiver is online
+        # ✅ Send message if recipient is online
         receiver_socket = self.active_connections.get(receiver_id)
         if receiver_socket:
             try:
                 await receiver_socket.send_text(json.dumps({"type": "message", "data": formatted_message}))
             except Exception as e:
                 print(f"Error sending message to {receiver_id}: {e}")
-                self.disconnect(receiver_id)
+                self.disconnect(receiver_id)  # Remove inactive connection
 
-        # Send acknowledgment to sender
+        # ✅ Send acknowledgment to sender
         sender_socket = self.active_connections.get(sender_id)
         if sender_socket:
             await sender_socket.send_text(json.dumps({"type": "acknowledgment", "data": formatted_message}))
