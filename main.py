@@ -14,15 +14,62 @@ class ChatHistory(me.Document):
     recipient = me.StringField(required=True)
     timestamp = me.DateTimeField(default=datetime.utcnow)
 
+# FastAPI App
 app = FastAPI()
-active_connections: Dict[str, WebSocket] = {}
 
-@app.websocket("/ws/chat/{user}")
-async def chat(websocket: WebSocket, user: str):
-    user = str(user)
-    await websocket.accept()
-    active_connections[user] = websocket
-    print(f"User {user} connected. Active users: {list(active_connections.keys())}")
+# WebSocket Connection Manager
+class ConnectionManager:
+    """Handles WebSocket connections and messaging."""
+    
+    def __init__(self):
+        self.active_connections: Dict[str, WebSocket] = {}
+
+    async def connect(self, websocket: WebSocket, user_id: str):
+        """Accept WebSocket connection and store it."""
+        await websocket.accept()
+        self.active_connections[user_id] = websocket
+        print(f"User {user_id} connected. Active users: {list(self.active_connections.keys())}")
+
+    def disconnect(self, user_id: str):
+        """Remove WebSocket connection on disconnect."""
+        self.active_connections.pop(user_id, None)
+        print(f"User {user_id} disconnected. Updated users: {list(self.active_connections.keys())}")
+
+    async def send_private_message(self, sender_id: str, receiver_id: str, message: str):
+        """Send a message to a specific user and store in MongoDB."""
+        
+        # Store message in MongoDB
+        chat = ChatHistory(message=message, sender=sender_id, recipient=receiver_id)
+        chat.save()
+
+        formatted_message = {
+            "sender": sender_id,
+            "recipient": receiver_id,
+            "message": message,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
+        # Send message if receiver is online
+        receiver_socket = self.active_connections.get(receiver_id)
+        if receiver_socket:
+            try:
+                await receiver_socket.send_text(json.dumps({"type": "message", "data": formatted_message}))
+            except Exception as e:
+                print(f"Error sending message to {receiver_id}: {e}")
+                self.disconnect(receiver_id)
+
+        # Send acknowledgment to sender
+        sender_socket = self.active_connections.get(sender_id)
+        if sender_socket:
+            await sender_socket.send_text(json.dumps({"type": "acknowledgment", "data": formatted_message}))
+
+# Instantiate Connection Manager
+manager = ConnectionManager()
+
+@app.websocket("/ws/chat/{user_id}")
+async def websocket_endpoint(websocket: WebSocket, user_id: str):
+    """WebSocket endpoint for user messaging."""
+    await manager.connect(websocket, user_id)
 
     try:
         while True:
@@ -31,48 +78,28 @@ async def chat(websocket: WebSocket, user: str):
 
             try:
                 message_data = json.loads(data)
-                recipient = str(message_data["recipient"])
-                message = message_data["message"]
-            except Exception as e:
-                print(f"JSON parsing error: {e}")
-                continue
+                recipient = str(message_data.get("recipient"))
+                message = message_data.get("message")
+                
+                if not recipient or not message:
+                    await websocket.send_text(json.dumps({"error": "Missing recipient or message"}))
+                    continue
 
-            print(f"Received message from {user} to {recipient}: {message}")
+                print(f"Received message from {user_id} to {recipient}: {message}")
+                await manager.send_private_message(user_id, recipient, message)
 
-            # Save message in MongoDB
-            chat = ChatHistory(message=message, sender=user, recipient=recipient)
-            chat.save()
-
-            formatted_message = {
-                "sender": user,
-                "recipient": recipient,
-                "message": message,
-                "timestamp": datetime.utcnow().isoformat()
-            }
-
-            # Send to recipient if online
-            if recipient in active_connections:
-                recipient_ws = active_connections[recipient]
-                print(f"Recipient {recipient} found in active_connections.")  # Debugging
-
-                try:
-                    await recipient_ws.send_text(json.dumps({"type": "message", "data": formatted_message}))
-                except Exception as e:
-                    print(f"Error sending message to {recipient}: {e}")
-                    del active_connections[recipient]
-            else:
-                print(f"Recipient {recipient} is NOT in active_connections!")  # Debugging
-
-            await websocket.send_text(json.dumps({"type": "acknowledgment", "data": formatted_message}))
+            except json.JSONDecodeError:
+                print("Invalid JSON format received")
+                await websocket.send_text(json.dumps({"error": "Invalid JSON format"}))
 
     except WebSocketDisconnect:
-        print(f"User {user} disconnected")
-        if user in active_connections:
-            del active_connections[user]
-        print(f"Updated active users: {list(active_connections.keys())}")
+        manager.disconnect(user_id)
 
+# API to retrieve chat history
 @app.get("/messages/{user_name}/{other_user_name}")
 async def get_old_messages(user_name: str, other_user_name: str, limit: int = 10):
+    """Retrieve old messages between two users."""
+    
     history = ChatHistory.objects(
         (me.Q(sender=user_name) & me.Q(recipient=other_user_name)) | 
         (me.Q(sender=other_user_name) & me.Q(recipient=user_name))
