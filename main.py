@@ -27,17 +27,25 @@ class ConnectionManager:
     async def connect(self, websocket: WebSocket, user_id: str):
         """Accept WebSocket connection and store it."""
         await websocket.accept()
+
+        # ✅ If user was disconnected earlier, reconnect properly
+        if user_id in self.active_connections:
+            print(f"🔄 User {user_id} reconnected.")
+        
         self.active_connections[user_id] = websocket
         print(f"✅ User {user_id} connected. Active users: {list(self.active_connections.keys())}")
         
         # ✅ Ensure all users get the updated active users list
         await self.notify_active_users()
 
-    def disconnect(self, user_id: str):
+    async def disconnect(self, user_id: str):
         """Remove WebSocket connection on disconnect."""
         if user_id in self.active_connections:
             del self.active_connections[user_id]
             print(f"❌ User {user_id} disconnected. Updated users: {list(self.active_connections.keys())}")
+        
+        # ✅ Notify all users after disconnection
+        await self.notify_active_users()
 
     async def send_private_message(self, sender_id: str, receiver_id: str, message: str):
         """Send a message to a specific user and store in MongoDB."""
@@ -62,7 +70,7 @@ class ConnectionManager:
                 print(f"✅ Message sent to {receiver_id}")
             except Exception as e:
                 print(f"❌ Error sending message to {receiver_id}: {e}")
-                self.disconnect(receiver_id)  # Remove inactive connection
+                await self.disconnect(receiver_id)  # Remove inactive connection
 
         # ✅ Send acknowledgment to sender
         sender_socket = self.active_connections.get(sender_id)
@@ -83,7 +91,7 @@ class ConnectionManager:
                 await websocket.send_text(json.dumps({"type": "active_users", "data": active_users_list}))
             except Exception as e:
                 print(f"❌ Error notifying {user_id} of active users: {e}")
-                self.disconnect(user_id)
+                await self.disconnect(user_id)
 
 # Instantiate Connection Manager
 manager = ConnectionManager()
@@ -116,8 +124,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
 
     except WebSocketDisconnect:
         print(f"⚠️ {user_id} disconnected")
-        manager.disconnect(user_id)
-        await manager.notify_active_users()
+        await manager.disconnect(user_id)
 
 # API to retrieve chat history
 @app.get("/messages/{user_name}/{other_user_name}")
