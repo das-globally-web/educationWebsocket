@@ -3,6 +3,7 @@ import mongoengine as me
 from datetime import datetime
 from typing import Dict
 import json
+import uvicorn
 
 # MongoDB setup
 me.connect('educatChatHistory', host="mongodb+srv://avbigbuddy:nZ4ATPTwJjzYnm20@cluster0.wplpkxz.mongodb.net/educatChatHistory")
@@ -31,6 +32,11 @@ class ConnectionManager:
         # ✅ If user was disconnected earlier, reconnect properly
         if user_id in self.active_connections:
             print(f"🔄 User {user_id} reconnected.")
+            # Close the old connection if it exists
+            try:
+                await self.active_connections[user_id].close()
+            except Exception as e:
+                print(f"❌ Error closing old connection for {user_id}: {e}")
         
         self.active_connections[user_id] = websocket
         print(f"✅ User {user_id} connected. Active users: {list(self.active_connections.keys())}")
@@ -151,8 +157,6 @@ async def get_old_messages(user_name: str, other_user_name: str, limit: int = 10
         ],
         "status": True
     }
-
-import uvicorn
 
 if __name__ == "__main__":
     uvicorn.run("main:app", port=8080, reload=True)
