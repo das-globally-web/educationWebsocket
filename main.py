@@ -4,7 +4,11 @@ from datetime import datetime
 from typing import Dict
 import json
 import uvicorn
-
+import httpx
+import requests
+import google.auth
+from google.auth.transport.requests import Request
+from google.oauth2 import service_account
 # MongoDB setup
 me.connect('educatChatHistory', host="mongodb+srv://avbigbuddy:nZ4ATPTwJjzYnm20@cluster0.wplpkxz.mongodb.net/educatChatHistory")
 
@@ -17,6 +21,68 @@ class ChatHistory(me.Document):
 
 # FastAPI App
 app = FastAPI()
+
+def get_access_token(credentials_path):
+    """Get an OAuth 2.0 access token using a service account JSON key file."""
+    credentials = service_account.Credentials.from_service_account_file(
+        credentials_path,
+        scopes=['https://www.googleapis.com/auth/cloud-platform']
+    )
+    credentials.refresh(Request())
+    return credentials.token
+
+def sendNotificationss(username, message, project_id, credentials_path, device_token):
+    FCM_URL = f"https://fcm.googleapis.com/v1/projects/{project_id}/messages:send"
+    
+    # Get the OAuth 2.0 access token
+    access_token = get_access_token(credentials_path)
+    
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "message": {
+            "token": device_token,  # Device token
+            "notification": {
+                "title": username,
+                "body": message
+            },
+            "android": {
+                "priority": "HIGH"  # Set priority for Android devices
+            },
+            "apns": {
+                "headers": {
+                    "apns-priority": "10"  # Set priority for iOS devices
+                }
+            }
+        }
+    }
+    try:
+        response = requests.post(FCM_URL, headers=headers, json=payload)
+        response.raise_for_status()  # Raise an error for bad status codes
+        print("Notification sent successfully!")
+        print("Response Status:", response.status_code)
+        print("Response Body:", response.text)
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print("Failed to send notification:", e)
+        return None
+project_id = "educat-5e4fa"
+credentials_path = "educat-5e4fa-firebase-adminsdk-fbsvc-431f62e311.json"
+
+
+
+@app.post("/send-notification/")
+async def send_notification():
+    response =  sendNotificationss(
+    username="Test User",
+    message="Hello! This is a test notification.",
+    project_id=project_id,
+    credentials_path=credentials_path)
+    return {"response": response}   
+
 
 # WebSocket Connection Manager
 class ConnectionManager:
@@ -73,6 +139,7 @@ class ConnectionManager:
             try:
                 print(f"📨 Sending message to {receiver_id}...")
                 await receiver_socket.send_text(json.dumps({"type": "message", "data": formatted_message}))
+                
                 print(f"✅ Message sent to {receiver_id}")
             except Exception as e:
                 print(f"❌ Error sending message to {receiver_id}: {e}")
@@ -84,6 +151,20 @@ class ConnectionManager:
             try:
                 print(f"✅ Sending acknowledgment to {sender_id}")
                 await sender_socket.send_text(json.dumps({"type": "acknowledgment", "data": formatted_message}))
+                url = f"https://education.globallywebsolutions.com/api/profile/{sender_id}"
+                response = requests.get(url)
+        
+        # Check if the request was successful (status code 200)
+                response.raise_for_status()
+        
+        # Parse the JSON response
+                profile_data = response.json()
+                print(profile_data)
+                response =  sendNotificationss(
+                username=f"{profile_data["data"]["email"]}",
+                message=f"{message}",
+                project_id=project_id,
+                credentials_path=credentials_path, device_token=f"{profile_data["data"]["device_token"]}")
             except Exception as e:
                 print(f"❌ Error sending acknowledgment to {sender_id}: {e}")
 
